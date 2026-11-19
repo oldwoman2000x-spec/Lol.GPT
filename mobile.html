@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Поиск для команды</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: system-ui, -apple-system, sans-serif; color: #222; background: #f5f6f8; padding: 16px; padding-bottom: env(safe-area-inset-bottom); }
+  h1 { font-size: 1.4em; margin: 8px 0 16px; }
+  .card { background: #fff; border: 1px solid #e2e4e8; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  label { display: block; font-size: 0.9em; color: #555; margin-bottom: 4px; }
+  input { width: 100%; padding: 14px; margin-bottom: 12px; border: 1px solid #bbb; border-radius: 10px; font-size: 16px; }
+  button { width: 100%; min-height: 48px; padding: 12px; border: 0; border-radius: 10px; background: #2563eb; color: #fff; font-size: 16px; font-weight: 600; margin-bottom: 10px; }
+  button.secondary { background: #6b7280; }
+  button:disabled { opacity: 0.6; }
+  .error { color: #b91c1c; min-height: 1.2em; font-size: 0.95em; margin-bottom: 8px; }
+  .result { padding: 12px 0; border-bottom: 1px solid #eee; }
+  .result:last-child { border-bottom: 0; }
+  .result a { color: #1d4ed8; font-weight: 600; font-size: 1.02em; word-break: break-word; }
+  .result p { margin: 6px 0 0; color: #444; font-size: 0.95em; line-height: 1.4; }
+  .hidden { display: none; }
+  .who { font-size: 0.95em; color: #555; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<h1>Поиск для команды</h1>
+
+<div id="auth" class="card">
+  <h2 id="auth-title" style="font-size:1.2em;margin:0 0 12px;">Вход</h2>
+  <label for="username">Имя пользователя</label>
+  <input id="username" placeholder="От 3 символов" autocomplete="username" autocapitalize="none">
+  <label for="password">Пароль</label>
+  <input id="password" type="password" placeholder="От 8 символов" autocomplete="current-password">
+  <div class="error" id="auth-error"></div>
+  <button id="auth-submit">Войти</button>
+  <button class="secondary" id="auth-switch">Нет аккаунта? Регистрация</button>
+</div>
+
+<div id="search-panel" class="hidden">
+  <div class="who" id="who"></div>
+  <div class="card">
+    <form id="search-form">
+      <label for="query">Что ищем?</label>
+      <input id="query" type="search" placeholder="Введите запрос" maxlength="500" enterkeyhint="search" required>
+      <button type="submit" id="search-btn">Искать</button>
+    </form>
+    <div class="error" id="search-error"></div>
+  </div>
+  <div class="card hidden" id="results-card">
+    <div id="results"></div>
+  </div>
+  <button class="secondary" id="logout">Выйти</button>
+</div>
+
+<script>
+  const state = { mode: "login", token: localStorage.getItem("token"), username: localStorage.getItem("username") };
+  const $ = (id) => document.getElementById(id);
+
+  function showView() {
+    const loggedIn = Boolean(state.token);
+    $("auth").classList.toggle("hidden", loggedIn);
+    $("search-panel").classList.toggle("hidden", !loggedIn);
+    $("who").textContent = loggedIn ? "Вы вошли как " + state.username : "";
+  }
+
+  function setMode(mode) {
+    state.mode = mode;
+    const isLogin = mode === "login";
+    $("auth-title").textContent = isLogin ? "Вход" : "Регистрация";
+    $("auth-submit").textContent = isLogin ? "Войти" : "Зарегистрироваться";
+    $("auth-switch").textContent = isLogin ? "Нет аккаунта? Регистрация" : "Уже есть аккаунт? Вход";
+    $("auth-error").textContent = "";
+  }
+
+  async function submitAuth() {
+    const username = $("username").value.trim();
+    const password = $("password").value;
+    $("auth-error").textContent = "";
+    $("auth-submit").disabled = true;
+    try {
+      if (state.mode === "register") {
+        const r = await fetch("/auth/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, password }),
+        });
+        if (!r.ok) throw new Error((await r.json()).detail || "Ошибка регистрации");
+      }
+      const r = await fetch("/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      if (!r.ok) throw new Error((await r.json()).detail || "Ошибка входа");
+      const data = await r.json();
+      state.token = data.access_token;
+      state.username = username;
+      localStorage.setItem("token", state.token);
+      localStorage.setItem("username", username);
+      $("password").value = "";
+      showView();
+    } catch (e) {
+      $("auth-error").textContent = e.message;
+    } finally {
+      $("auth-submit").disabled = false;
+    }
+  }
+
+  function logout() {
+    state.token = null;
+    state.username = null;
+    localStorage.removeItem("token");
+    localStorage.removeItem("username");
+    $("results").textContent = "";
+    $("results-card").classList.add("hidden");
+    showView();
+  }
+
+  async function search(event) {
+    event.preventDefault();
+    const query = $("query").value.trim();
+    $("search-error").textContent = "";
+    $("search-btn").disabled = true;
+    $("results-card").classList.remove("hidden");
+    $("results").textContent = "Ищем...";
+    try {
+      const r = await fetch("/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + state.token },
+        body: JSON.stringify({ query, max_results: 5 }),
+      });
+      if (r.status === 401) { logout(); throw new Error("Сессия истекла, войдите снова"); }
+      if (!r.ok) throw new Error((await r.json()).detail || "Ошибка поиска");
+      const data = await r.json();
+      renderResults(data.results);
+    } catch (e) {
+      $("results").textContent = "";
+      $("results-card").classList.add("hidden");
+      $("search-error").textContent = e.message;
+    } finally {
+      $("search-btn").disabled = false;
+    }
+  }
+
+  function renderResults(items) {
+    const box = $("results");
+    box.textContent = "";
+    if (!items.length) { box.textContent = "Ничего не найдено."; return; }
+    for (const item of items) {
+      const div = document.createElement("div");
+      div.className = "result";
+      const a = document.createElement("a");
+      a.href = item.url || "#";
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.textContent = item.title || item.url || "Без названия";
+      const p = document.createElement("p");
+      p.textContent = item.content || "";
+      div.append(a, p);
+      box.append(div);
+    }
+  }
+
+  $("auth-submit").addEventListener("click", submitAuth);
+  $("auth-switch").addEventListener("click", () => setMode(state.mode === "login" ? "register" : "login"));
+  $("logout").addEventListener("click", logout);
+  $("search-form").addEventListener("submit", search);
+  setMode("login");
+  showView();
+</script>
+</body>
+</html>
